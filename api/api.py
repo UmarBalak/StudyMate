@@ -1,106 +1,189 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
-import pandas as pd
-import subprocess
-import os
-
-# File paths
-USERS_CSV = "users.csv"
-PROCESSED_CSV = "users_preprocessed.csv"
-RECOMMENDATIONS_CSV = "users_recommendations.csv"
+import psycopg2
+from db import connect_db
 
 app = FastAPI()
 
-# 📌 User Registration Model (Matches CSV Structure)
+# 📌 User Model
 class User(BaseModel):
     name: str
     age: int
-    study_level: str  # Beginner, Intermediate, Advanced
-    preferred_subjects: list[str]  # List of selected subjects
+    study_level: str
+    preferred_subjects: list[str]
     strengths: list[str]
     weaknesses: list[str]
-    learning_style: str  # Visual, Auditory, Problem-Solving, Text-based
-    study_preference: str  # Solo or Group
-    availability: list[str]  # Morning, Afternoon, Evening, Night
+    learning_style: str
+    study_preference: str
+    availability: list[str]
 
-# 📌 Load dataset functions
-def load_users():
-    if not os.path.exists(USERS_CSV):
-        return pd.DataFrame(columns=["user_id", "name", "age", "study_level", "preferred_subjects", "strengths",
-                                     "weaknesses", "learning_style", "study_preference", "availability"])
-    return pd.read_csv(USERS_CSV, dtype={"user_id": int})  # Force user_id as int
-
-def load_recommendations():
-    if not os.path.exists(RECOMMENDATIONS_CSV):
-        return pd.DataFrame(columns=["user_id", "recommendations"])
-    return pd.read_csv(RECOMMENDATIONS_CSV)
 
 @app.get("/")
-def home():
-    return {"message": "StudyMate API is running!"}
+def read_root():
+    return {"message": "Welcome to Study Partner Recommendation API!"}
 
-# ✅ Register a new user
+# 📌 Register a New User
 @app.post("/register/")
 def register_user(user: User):
-    try:
-        df = load_users()
+    conn = connect_db()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Database connection failed")
 
-        # Ensure "user_id" column exists and is numeric
-        if df.empty or "user_id" not in df.columns:
-            new_user_id = 1
-        else:
-            df["user_id"] = pd.to_numeric(df["user_id"], errors="coerce").fillna(0).astype(int)
-            new_user_id = df['user_id'].max() + 1
+    cursor = conn.cursor()
+    query = """
+    INSERT INTO users (name, age, study_level, preferred_subjects, strengths, weaknesses, learning_style, study_preference, availability)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING user_id;
+    """
+    cursor.execute(query, (
+        user.name, user.age, user.study_level,
+        user.preferred_subjects, user.strengths,
+        user.weaknesses, user.learning_style,
+        user.study_preference, user.availability
+    ))
 
-        print(f"New User ID: {new_user_id}")
+    new_user_id = cursor.fetchone()[0]
+    conn.commit()
+    cursor.close()
+    conn.close()
 
-        # Convert User object to dictionary
-        user_data = user.dict()
-        user_data["user_id"] = new_user_id
+    return {"message": "User registered successfully!", "user_id": new_user_id}
 
-        # Create DataFrame and reorder columns to put user_id first
-        new_user_df = pd.DataFrame([user_data])
-        columns = ["user_id"] + [col for col in new_user_df.columns if col != "user_id"]
-        new_user_df = new_user_df[columns]
+# 📌 Fetch All Users
+@app.get("/users/")
+def get_all_users():
+    conn = connect_db()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Database connection failed")
 
-        # Append to CSV
-        new_user_df.to_csv(USERS_CSV, mode='a', header=not os.path.exists(USERS_CSV), index=False)
-        
-        # 🔄 Recalculate recommendations
-        subprocess.run(["python", "preprocessing.py"])
-        subprocess.run(["python", "similarity.py"])
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users")
+    users = cursor.fetchall()
+    cursor.close()
+    conn.close()
 
-        return {"message": "User registered successfully!", "user_id": new_user_id}
+    users_list = [
+        {
+            "user_id": user[0],
+            "name": user[1],
+            "age": user[2],
+            "study_level": user[3],
+            "preferred_subjects": user[4],
+            "strengths": user[5],
+            "weaknesses": user[6],
+            "learning_style": user[7],
+            "study_preference": user[8],
+            "availability": user[9]
+        }
+        for user in users
+    ]
+    
+    return {"users": users_list}
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# 📌 Search Users by Skills (Preferred Subjects & Strengths)
+@app.get("/users/search/")
+def search_users(skill: str = Query(..., description="Skill to search for (subject or strength)")):
+    conn = connect_db()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Database connection failed")
 
-# ✅ Get study partner recommendations
+    cursor = conn.cursor()
+    query = """
+    SELECT * FROM users 
+    WHERE %s = ANY(preferred_subjects) OR %s = ANY(strengths)
+    """
+    cursor.execute(query, (skill, skill))
+    users = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    if not users:
+        return {"message": "No users found with this skill"}
+
+    users_list = [
+        {
+            "user_id": user[0],
+            "name": user[1],
+            "age": user[2],
+            "study_level": user[3],
+            "preferred_subjects": user[4],
+            "strengths": user[5],
+            "weaknesses": user[6],
+            "learning_style": user[7],
+            "study_preference": user[8],
+            "availability": user[9]
+        }
+        for user in users
+    ]
+    
+    return {"users": users_list}
+
+# 📌 Get Study Partner Recommendations
 @app.get("/recommend/{user_id}")
 def get_recommendations(user_id: int):
-    df = load_recommendations()
-    users_data = load_users()
+    conn = connect_db()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Database connection failed")
 
-    if df.empty or user_id not in df["user_id"].values:
-        raise HTTPException(status_code=404, detail="User not found")
+    cursor = conn.cursor()
+
+    # Check if user exists
+    cursor.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
+    user_data = cursor.fetchone()
     
-    user_info = {}
-    user = users_data[users_data["user_id"] == user_id].to_dict(orient="records")[0]
-    user.pop("user_id")
-    user_info[user_id] = user
+    if not user_data:
+        cursor.close()
+        conn.close()
+        raise HTTPException(status_code=404, detail="User not found")
 
-    recommendations = eval(df[df["user_id"] == user_id]["recommendations"].values[0])
-    recommended_users = {}
+    # Fetch recommendations
+    cursor.execute("SELECT recommendations FROM recommended WHERE user_id = %s", (user_id,))
+    recommendations = cursor.fetchone()
+    
+    if not recommendations:
+        cursor.close()
+        conn.close()
+        return {"user_id": user_id, "recommended_partners": []}
 
-    for user in recommendations:
-        id = int(user[0])
-        user_data = users_data[users_data["user_id"] == id].to_dict(orient="records")[0]
-        user_data.pop("user_id")
-        user_data["score"] = float(user[1])
-        recommended_users[id] = user_data
+    recommended_ids = recommendations[0]
 
+    # Fetch details of recommended users
+    cursor.execute("SELECT * FROM users WHERE user_id = ANY(%s)", (recommended_ids,))
+    recommended_users = cursor.fetchall()
 
+    cursor.close()
+    conn.close()
+
+    # Convert results to dictionary
+    user_dict = {
+        "user_id": user_data[0],
+        "name": user_data[1],
+        "age": user_data[2],
+        "study_level": user_data[3],
+        "preferred_subjects": user_data[4],
+        "strengths": user_data[5],
+        "weaknesses": user_data[6],
+        "learning_style": user_data[7],
+        "study_preference": user_data[8],
+        "availability": user_data[9]
+    }
+
+    recommended_users_list = [
+        {
+            "user_id": rec[0],
+            "name": rec[1],
+            "age": rec[2],
+            "study_level": rec[3],
+            "preferred_subjects": rec[4],
+            "strengths": rec[5],
+            "weaknesses": rec[6],
+            "learning_style": rec[7],
+            "study_preference": rec[8],
+            "availability": rec[9]
+        }
+        for rec in recommended_users
+    ]
+    
     return {
-        "user": user_info,
-        "recommendations": recommended_users
+        "user": user_dict,
+        "recommended_partners": recommended_users_list
     }

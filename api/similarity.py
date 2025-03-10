@@ -1,30 +1,54 @@
 import pandas as pd
 import numpy as np
+import json
 from sklearn.metrics.pairwise import cosine_similarity
+from db import connect_db
 
-# File paths
-PROCESSED_DATA_PATH = "users_preprocessed.csv"
-RECOMMENDATIONS_PATH = "users_recommendations.csv"
+# Connect to NeonDB
+conn = connect_db()
+if not conn:
+    print("❌ Database connection failed.")
+    exit()
 
-# Load the preprocessed dataset
-df = pd.read_csv(PROCESSED_DATA_PATH)
+cursor = conn.cursor()
 
-# Define feature columns (excluding non-numerical data)
-feature_columns = df.columns.difference(["user_id", "name"])
+# Fetch preprocessed user data from NeonDB
+query = "SELECT user_id, encoded_features FROM preprocessed"
+df = pd.read_sql(query, conn)
 
-# Calculate cosine similarity between users
-similarity_matrix = cosine_similarity(df[feature_columns])
+# 🔹 Convert JSON features into structured DataFrame
+def parse_json(x):
+    if isinstance(x, str):  
+        return json.loads(x)  
+    return x  # If already a dictionary, return as is
 
-# Generate recommendations
+df["encoded_features"] = df["encoded_features"].apply(parse_json)
+
+# 🔹 Expand encoded features into separate columns
+features = pd.json_normalize(df["encoded_features"])
+features.insert(0, "user_id", df["user_id"])  # Restore user_id
+
+# 🔹 Ensure all feature columns contain only numbers
+feature_columns = features.columns.difference(["user_id"])
+features[feature_columns] = features[feature_columns].apply(pd.to_numeric, errors="coerce").fillna(0)
+
+# 🔹 Compute cosine similarity
+similarity_matrix = cosine_similarity(features[feature_columns])
+
+# 🔹 Generate recommendations
 recommendations = {}
-for idx, row in df.iterrows():
+for idx, row in features.iterrows():
     similar_indices = similarity_matrix[idx].argsort()[-4:-1][::-1]  # Get top 3 similar users
-    recommendations[row["user_id"]] = [(df.iloc[i]["user_id"], similarity_matrix[idx][i]) for i in similar_indices]
+    recommendations[row["user_id"]] = [int(features.iloc[i]["user_id"]) for i in similar_indices]
 
-# Assign recommendations to the dataframe
-df["recommendations"] = df["user_id"].map(recommendations)
+# 🔹 Store recommendations in NeonDB (`recommended` table)
+cursor.execute("DELETE FROM recommended")  # Clear previous data
+for user_id, recs in recommendations.items():
+    postgres_array = "{" + ",".join(map(str, recs)) + "}"  # ✅ Convert list to PostgreSQL array format
+    cursor.execute("INSERT INTO recommended (user_id, recommendations) VALUES (%s, %s)", (user_id, postgres_array))
 
-# Save the recommendations dataset
-df.to_csv(RECOMMENDATIONS_PATH, index=False)
+conn.commit()
+cursor.close()
+conn.close()
 
-print(f"✅ Recommendations Complete! Saved as {RECOMMENDATIONS_PATH}")
+print("✅ Recommendations Complete! Stored in NeonDB.")

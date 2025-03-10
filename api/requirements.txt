@@ -4,3 +4,6 @@ pandas
 scikit-learn
 uvicorn
 numpy
+psycopg2-binary
+python-dotenv
+sqlalchemy
