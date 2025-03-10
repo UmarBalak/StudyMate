@@ -1,12 +1,20 @@
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 import psycopg2
+import uuid
 from db import connect_db
 
 app = FastAPI()
 
-# 📌 User Model
-class User(BaseModel):
+# 📌 In-memory session storage (temporary)
+active_sessions = {}
+
+# 📌 User Models
+class SignUpData(BaseModel):
+    username: str
+    password: str
+
+class PreferencesData(BaseModel):
     name: str
     age: int
     study_level: str
@@ -17,36 +25,123 @@ class User(BaseModel):
     study_preference: str
     availability: list[str]
 
+class LoginData(BaseModel):
+    username: str
+    password: str
 
 @app.get("/")
 def read_root():
-    return {"message": "Welcome to Study Partner Recommendation API!"}
+    return {"message": "Welcome to StudyMate API!"}
 
-# 📌 Register a New User
-@app.post("/register/")
-def register_user(user: User):
+# 📌 User Sign-Up (Account Creation)
+@app.post("/signup/")
+def signup(signup_data: SignUpData):
     conn = connect_db()
     if not conn:
         raise HTTPException(status_code=500, detail="Database connection failed")
 
     cursor = conn.cursor()
-    query = """
-    INSERT INTO users (name, age, study_level, preferred_subjects, strengths, weaknesses, learning_style, study_preference, availability)
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING user_id;
-    """
-    cursor.execute(query, (
-        user.name, user.age, user.study_level,
-        user.preferred_subjects, user.strengths,
-        user.weaknesses, user.learning_style,
-        user.study_preference, user.availability
-    ))
 
-    new_user_id = cursor.fetchone()[0]
+    # 🔹 Check if username is already taken
+    cursor.execute("SELECT user_id FROM login WHERE username = %s", (signup_data.username,))
+    if cursor.fetchone():
+        cursor.close()
+        conn.close()
+        raise HTTPException(status_code=400, detail="Username already exists")
+
+    # 🔹 Insert user into `users` first to generate `user_id`
+    query_users = """
+    INSERT INTO users (name, age, study_level, preferred_subjects, strengths, weaknesses, learning_style, study_preference, availability)
+    VALUES ('', 0, '', ARRAY[]::TEXT[], ARRAY[]::TEXT[], ARRAY[]::TEXT[], '', '', ARRAY[]::TEXT[])
+    RETURNING user_id;
+    """
+    cursor.execute(query_users)
+    new_user_id = cursor.fetchone()[0]  # Get the generated `user_id`
+
+    # 🔹 Now insert into `login` with the same `user_id`
+    query_login = """
+    INSERT INTO login (user_id, username, password) VALUES (%s, %s, %s);
+    """
+    cursor.execute(query_login, (new_user_id, signup_data.username, signup_data.password))
+
     conn.commit()
     cursor.close()
     conn.close()
 
-    return {"message": "User registered successfully!", "user_id": new_user_id}
+    return {"message": "Signup successful! Please update your profile.", "user_id": new_user_id}
+
+# 📌 Register User Preferences (After Signup)
+@app.post("/register/preferences/")
+def register_preferences(user_id: int, preferences: PreferencesData):
+    conn = connect_db()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Database connection failed")
+
+    cursor = conn.cursor()
+
+    # 🔹 Check if user exists in `users`
+    cursor.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
+    if not cursor.fetchone():
+        cursor.close()
+        conn.close()
+        raise HTTPException(status_code=404, detail="User not found. Please sign up first.")
+
+    # 🔹 Update existing user preferences
+    query_user = """
+    UPDATE users
+    SET name = %s, age = %s, study_level = %s, preferred_subjects = %s,
+        strengths = %s, weaknesses = %s, learning_style = %s, 
+        study_preference = %s, availability = %s
+    WHERE user_id = %s;
+    """
+    cursor.execute(query_user, (
+        preferences.name, preferences.age, preferences.study_level,
+        preferences.preferred_subjects, preferences.strengths,
+        preferences.weaknesses, preferences.learning_style,
+        preferences.study_preference, preferences.availability,
+        user_id  # 🔹 Ensure update is based on the correct user_id
+    ))
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return {"message": "User preferences updated successfully!"}
+
+# 📌 User Login
+@app.post("/login/")
+def login(login_data: LoginData):
+    conn = connect_db()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Database connection failed")
+
+    cursor = conn.cursor()
+
+    # 🔹 Check if username & password match
+    query = "SELECT user_id FROM login WHERE username = %s AND password = %s"
+    cursor.execute(query, (login_data.username, login_data.password))
+    user = cursor.fetchone()
+
+    cursor.close()
+    conn.close()
+
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    # 🔹 Generate session token
+    session_token = str(uuid.uuid4())
+    active_sessions[session_token] = user[0]  # Store user_id in session
+
+    return {"message": "Login successful", "session_token": session_token}
+
+# 📌 User Logout
+@app.post("/logout/")
+def logout(session_token: str):
+    if session_token in active_sessions:
+        del active_sessions[session_token]
+        return {"message": "Logout successful"}
+    
+    raise HTTPException(status_code=401, detail="Invalid session token")
 
 # 📌 Fetch All Users
 @app.get("/users/")
@@ -153,37 +248,4 @@ def get_recommendations(user_id: int):
     cursor.close()
     conn.close()
 
-    # Convert results to dictionary
-    user_dict = {
-        "user_id": user_data[0],
-        "name": user_data[1],
-        "age": user_data[2],
-        "study_level": user_data[3],
-        "preferred_subjects": user_data[4],
-        "strengths": user_data[5],
-        "weaknesses": user_data[6],
-        "learning_style": user_data[7],
-        "study_preference": user_data[8],
-        "availability": user_data[9]
-    }
-
-    recommended_users_list = [
-        {
-            "user_id": rec[0],
-            "name": rec[1],
-            "age": rec[2],
-            "study_level": rec[3],
-            "preferred_subjects": rec[4],
-            "strengths": rec[5],
-            "weaknesses": rec[6],
-            "learning_style": rec[7],
-            "study_preference": rec[8],
-            "availability": rec[9]
-        }
-        for rec in recommended_users
-    ]
-    
-    return {
-        "user": user_dict,
-        "recommended_partners": recommended_users_list
-    }
+    return {"user": user_data, "recommended_partners": recommended_users}
