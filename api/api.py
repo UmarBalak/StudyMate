@@ -1,10 +1,19 @@
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
-import psycopg2
+from fastapi.middleware.cors import CORSMiddleware
 import uuid
 from db import connect_db
 
 app = FastAPI()
+
+# Allow all origins for now (CORS)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all methods
+    allow_headers=["*"],  # Allow all headers
+)
 
 # 📌 In-memory session storage (temporary)
 active_sessions = {}
