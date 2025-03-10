@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 import uuid
 from db import connect_db
+import subprocess
 
 app = FastAPI()
 
@@ -114,6 +115,12 @@ def register_preferences(user_id: int, preferences: PreferencesData):
     conn.commit()
     cursor.close()
     conn.close()
+
+    
+    # Run preprocessing and similarity scripts
+    subprocess.run(["python", "e:/StudyMate/api/preprocessing.py"])
+    subprocess.run(["python", "e:/StudyMate/api/similarity.py"])
+
 
     return {"message": "User preferences updated successfully!"}
 
