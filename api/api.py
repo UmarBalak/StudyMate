@@ -118,8 +118,8 @@ def register_preferences(user_id: int, preferences: PreferencesData):
 
     
     # Run preprocessing and similarity scripts
-    subprocess.run(["python", "e:/StudyMate/api/preprocessing.py"])
-    subprocess.run(["python", "e:/StudyMate/api/similarity.py"])
+    subprocess.run(["python", "preprocessing.py"])
+    subprocess.run(["python", "similarity.py"])
 
 
     return {"message": "User preferences updated successfully!"}
