@@ -94,8 +94,13 @@ async def register_preferences(user_id: int, preferences: PreferencesData, db=De
         )
 
     # Run preprocessing and similarity scripts asynchronously
-    await asyncio.create_subprocess_exec("python", "preprocessing.py")
-    await asyncio.create_subprocess_exec("python", "similarity.py")
+    try:
+        await asyncio.gather(
+            asyncio.create_subprocess_exec("python", "preprocessing.py"),
+            asyncio.create_subprocess_exec("python", "similarity.py")
+        )
+    except Exception as e:
+        print("Error running scripts:", e)
 
     return {"message": "User preferences updated successfully!"}
 
