@@ -93,15 +93,19 @@ async def register_preferences(user_id: int, preferences: PreferencesData, db=De
             user_id
         )
 
-    # Run preprocessing and similarity scripts asynchronously
+    # ✅ Ensure Preprocessing Completes First
     try:
-        await asyncio.create_subprocess_exec("python", "preprocessing.py"),
-        await asyncio.create_subprocess_exec("python", "similarity.py")
-        print("Preprocessing and similarity scripts executed successfully!")
-    except Exception as e:
-        print("Error running scripts:", e)
+        preprocess = await asyncio.create_subprocess_exec("python", "preprocessing.py")
+        await preprocess.wait()  # 🔹 Wait for preprocessing to finish
 
-    return {"message": "User preferences updated successfully!"}
+        similarity = await asyncio.create_subprocess_exec("python", "similarity.py")
+        await similarity.wait()  # 🔹 Only then run similarity
+
+        print("✅ Preprocessing and similarity scripts executed successfully!")
+    except Exception as e:
+        print("❌ Error running scripts:", e)
+
+    return {"message": "User preferences updated and recommendations generated!"}
 
 @app.post("/login/")
 async def login(login_data: LoginData, db=Depends(get_db_connection)):
