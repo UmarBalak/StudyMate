@@ -135,7 +135,8 @@ def advanced_recommendation_strategy(similarity_matrix, features, top_k=5):
             reverse=True
         )[:top_k]
     
-    return {k: [rec[0] for rec in v] for k, v in recommendations.items()}
+    return {k: [rec[0] for rec in reversed(v)] for k, v in recommendations.items()}
+
 
 def main():
     """Advanced recommendation workflow"""
