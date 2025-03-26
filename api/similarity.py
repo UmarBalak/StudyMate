@@ -56,17 +56,21 @@ def compute_multi_dimensional_similarity(features, feature_columns):
     # Weighted combination of similarity matrices
     weights = {
         'preferred_weight': 0.3,   # Subject interests
-        'strength_weight': 0.6,   # Technical strengths
+        'strength_weight': 0.7,   # Technical strengths
         'weak_weight': 0.0,       # Complementary weaknesses
-        'demographic_weight': 0.1  # Learning style & demographics
+        'demographic_weight': 0.0  # Learning style & demographics
     }
     
     multi_sim = (
         weights['preferred_weight'] * preferred_sim +
-        weights['strength_weight'] * strength_sim +
-        weights['weak_weight'] * weak_sim +
-        weights['demographic_weight'] * demographic_sim
+        weights['strength_weight'] * strength_sim
     )
+    # multi_sim = (
+    #     weights['preferred_weight'] * preferred_sim +
+    #     weights['strength_weight'] * strength_sim +
+    #     weights['weak_weight'] * weak_sim +
+    #     weights['demographic_weight'] * demographic_sim
+    # )
     
     return multi_sim
 
@@ -113,10 +117,14 @@ def advanced_recommendation_strategy(similarity_matrix, features, top_k=5):
             
             # Final recommendation score
             final_score = (
-                0.5 * rec_score + 
-                0.3 * interests_overlap + 
-                0.2 * complementary_weakness_score
+                0.7 * rec_score + 
+                0.3 * interests_overlap
             )
+            # final_score = (
+            #     0. * rec_score + 
+            #     0.3 * interests_overlap + 
+            #     0.2 * complementary_weakness_score
+            # )
             
             rec_scores[user_id] = final_score
         
